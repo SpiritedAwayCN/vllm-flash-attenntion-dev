@@ -1,5 +1,7 @@
 *.ncu-rep
 .DS_store
+.hypothesis/
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
