@@ -367,7 +367,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                     const double softcap,
                     const bool return_softmax,
                     c10::optional<at::Generator> gen_,
-                    const at::Tensor &seqlens_k_firstseg) {
+                    const at::Tensor &seqlens_q_firstseg) {
 
     // Otherwise the kernel will be launched from cuda:0 device
     at::cuda::CUDAGuard device_guard{q.device()};
@@ -464,6 +464,9 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
         CHECK_SHAPE(seqused_k_, batch_size);
     }
 
+    CHECK_DEVICE(seqlens_q_firstseg);
+    CHECK_SHAPE(seqlens_q_firstseg, batch_size)
+
     at::Tensor out;
     if (out_.has_value()) {
         out = out_.value();
@@ -525,6 +528,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                      seqlenq_ngroups_swapped,
                      /*unpadded_lse*/true);
     params.total_q = total_q;
+    params.seqlens_q_firstseg = static_cast<int*>(seqlens_q_firstseg.data_ptr());
 
     if (paged_KV) {
         params.block_table = block_table.data_ptr<int>();
