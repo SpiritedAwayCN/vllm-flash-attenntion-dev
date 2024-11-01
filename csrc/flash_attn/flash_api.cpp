@@ -282,7 +282,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                     const double softcap,
                     const bool return_softmax,
                     c10::optional<at::Generator> gen_,
-                    const at::Tensor &seqlens_k_firstseg) {
+                    const at::Tensor &seqlens_q_firstseg) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
@@ -382,6 +382,9 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
         CHECK_SHAPE(seqused_k_, batch_size);
     }
 
+    CHECK_DEVICE(seqlens_q_firstseg);
+    CHECK_SHAPE(seqlens_q_firstseg, batch_size);
+
     at::Tensor q_padded, k_padded, v_padded;
     if (head_size_og % 8 != 0) {
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
@@ -454,6 +457,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                      seqlenq_ngroups_swapped,
                      /*unpadded_lse*/true);
     params.total_q = total_q;
+    params.seqlens_q_firstseg = static_cast<int*>(seqlens_q_firstseg.data_ptr());
 
     if (paged_KV) {
         params.block_table = block_table.data_ptr<int>();
@@ -1255,7 +1259,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
             "Tensor cu_seqlens_k, Tensor? seqused_k, Tensor? block_table, Tensor? alibi_slopes, "
             "int max_seqlen_q, int max_seqlen_k, float p_dropout, float softmax_scale, bool zero_tensors, "
             "bool is_causal, int window_size_left, int window_size_right, float softcap, bool return_softmax, "
-            "Generator? gen, Tensor seqlens_k_firstseg) -> Tensor[]");
+            "Generator? gen, Tensor seqlens_q_firstseg) -> Tensor[]");
     ops.impl("varlen_2seg_fwd", torch::kCUDA, &mha_varlen_2seg_fwd);
 
     ops.def("varlen_fwd(Tensor! q, Tensor k, Tensor v, Tensor!? out, Tensor cu_seqlens_q, "

@@ -142,6 +142,10 @@ struct Flash_fwd_params : public Qkv_params {
 
     bool unpadded_lse;  // For varlen paths: LSE is in [nheads, total_seqlen_q] format instead of [b, nheads, seqlen_q].
     bool seqlenq_ngroups_swapped;  // q has been transposed from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv, d).
+
+    // Optional for 2-segment forward
+    int * __restrict__ seqlens_q_firstseg; // shape (b,)
+    // int * __restrict__ seqlens_k_fitstseg; // shape (b,)
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

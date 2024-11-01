@@ -12,14 +12,16 @@ template<bool Varlen=true>
 struct BlockInfo {
 
     template<typename Params>
-    __device__ BlockInfo(const Params &params, const int bidb)
+    __device__ BlockInfo(const Params &params, const int bidb, const int startloc)
         : sum_s_q(!Varlen || params.cu_seqlens_q == nullptr ? -1 : params.cu_seqlens_q[bidb])
         , sum_s_k(!Varlen || params.cu_seqlens_k == nullptr || !params.is_seqlens_k_cumulative ? -1 : params.cu_seqlens_k[bidb])
-        , actual_seqlen_q(!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q : params.cu_seqlens_q[bidb + 1] - sum_s_q)
+        , actual_seqlen_q(!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q : \
+            (params.seqlens_q_firstseg==nullptr || startloc>= params.seqlens_q_firstseg[bidb]? params.cu_seqlens_q[bidb + 1] - sum_s_q : params.seqlens_q_firstseg[bidb]))
         // If is_seqlens_k_cumulative, then seqlen_k is cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb].
         // Otherwise it's cu_seqlens_k[bidb], i.e., we use cu_seqlens_k to store the sequence lengths of K.
         , seqlen_k_cache(!Varlen || params.cu_seqlens_k == nullptr ? params.seqlen_k : (params.is_seqlens_k_cumulative ? params.cu_seqlens_k[bidb + 1] - sum_s_k : params.cu_seqlens_k[bidb]))
-        , actual_seqlen_k(params.seqused_k ? params.seqused_k[bidb] : seqlen_k_cache + (params.knew_ptr == nullptr ? 0 : params.seqlen_knew))
+        , actual_seqlen_k((params.seqused_k && (params.seqlens_q_firstseg==nullptr || startloc<params.seqlens_q_firstseg[bidb])) ? params.seqused_k[bidb] : \
+            seqlen_k_cache + (params.knew_ptr == nullptr ? 0 : params.seqlen_knew))
         {
         }
 

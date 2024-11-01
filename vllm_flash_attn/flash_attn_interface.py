@@ -67,6 +67,55 @@ def _flash_attn_forward(
     )
     return out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state
 
+def _flash_attn_varlen_2seg_forward(
+    q,
+    k,
+    v,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q,
+    max_seqlen_k,
+    dropout_p,
+    softmax_scale,
+    causal,
+    window_size,
+    softcap,
+    alibi_slopes,
+    return_softmax,
+    block_table,
+    *,
+    out=None,
+    seqused_k=None,
+    seqlens_q_firstseg=None,
+):
+    q, k, v = [maybe_contiguous(x) for x in (q, k, v)]
+    out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = torch.ops.vllm_flash_attn_c.varlen_2seg_fwd(
+        q,
+        k,
+        v,
+        out,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        seqused_k,
+        block_table,
+        alibi_slopes,
+        max_seqlen_q,
+        max_seqlen_k,
+        dropout_p,
+        softmax_scale,
+        False,
+        causal,
+        window_size[0],
+        window_size[1],
+        softcap,
+        return_softmax,
+        None,
+        seqlens_q_firstseg
+    )
+    # if out.isnan().any() or softmax_lse.isnan().any():
+    #     breakpoint()
+    return out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state
+
 
 def _flash_attn_varlen_forward(
     q,
@@ -85,7 +134,8 @@ def _flash_attn_varlen_forward(
     return_softmax,
     block_table,
     *,
-    out=None
+    out=None,
+    seqused_k=None
 ):
     q, k, v = [maybe_contiguous(x) for x in (q, k, v)]
     out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = torch.ops.vllm_flash_attn_c.varlen_fwd(
@@ -95,7 +145,7 @@ def _flash_attn_varlen_forward(
         out,
         cu_seqlens_q,
         cu_seqlens_k,
-        None,
+        seqused_k,
         block_table,
         alibi_slopes,
         max_seqlen_q,
@@ -605,6 +655,99 @@ class FlashAttnFunc(torch.autograd.Function):
         dv = dv[..., : dout.shape[-1]]
         return dq, dk, dv, None, None, None, None, None, None, None, None
 
+class FlashAttnVarlen2SegFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        q,
+        k,
+        v,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        softcap,
+        alibi_slopes,
+        deterministic,
+        return_softmax,
+        block_table,
+        out=None,
+        seqused_k=None,
+        seqlens_q_firstseg=None
+    ):
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** (-0.5)
+        out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_varlen_forward(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            dropout_p,
+            softmax_scale,
+            causal=causal,
+            window_size=window_size,
+            softcap=softcap,
+            alibi_slopes=alibi_slopes,
+            return_softmax=return_softmax and dropout_p > 0,
+            block_table=block_table,
+            out=out,
+            seqused_k=seqused_k,
+            seqlens_q_firstseg=seqlens_q_firstseg,
+        )
+        ctx.save_for_backward(
+            q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state
+        )
+        ctx.dropout_p = dropout_p
+        ctx.max_seqlen_q = max_seqlen_q
+        ctx.max_seqlen_k = max_seqlen_k
+        ctx.softmax_scale = softmax_scale
+        ctx.causal = causal
+        ctx.window_size = window_size
+        ctx.softcap = softcap
+        ctx.alibi_slopes = alibi_slopes
+        ctx.deterministic = deterministic
+        return out if not return_softmax else (out, softmax_lse, S_dmask)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        # can not be run
+        q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state = ctx.saved_tensors
+        dq, dk, dv = torch.empty_like(q), torch.empty_like(k), torch.empty_like(v)
+        _flash_attn_varlen_backward(
+            dout,
+            q,
+            k,
+            v,
+            out,
+            softmax_lse,
+            dq,
+            dk,
+            dv,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            ctx.max_seqlen_q,
+            ctx.max_seqlen_k,
+            ctx.dropout_p,
+            ctx.softmax_scale,
+            ctx.causal,
+            ctx.window_size,
+            ctx.softcap,
+            ctx.alibi_slopes,
+            ctx.deterministic,
+            rng_state=rng_state,
+        )
+        dq = dq[..., : dout.shape[-1]]  # We could have padded the head dimension
+        dk = dk[..., : dout.shape[-1]]
+        dv = dv[..., : dout.shape[-1]]
+        return dq, dk, dv, None, None, None, None, None, None, None, None, None, None, None, None, None
+
 
 class FlashAttnVarlenFunc(torch.autograd.Function):
     @staticmethod
@@ -627,6 +770,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         return_softmax,
         block_table,
         out=None,
+        seqused_k=None
     ):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
@@ -647,6 +791,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             return_softmax=return_softmax and dropout_p > 0,
             block_table=block_table,
             out=out,
+            seqused_k=seqused_k,
         )
         ctx.save_for_backward(
             q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state
@@ -1076,6 +1221,50 @@ def flash_attn_varlen_kvpacked_func(
         out,
     )
 
+def flash_attn_varlen_2seg_func(
+    q,
+    k,
+    v,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q,
+    max_seqlen_k,
+    dropout_p=0.0,
+    softmax_scale=None,
+    causal=False,
+    window_size=(-1, -1),  # -1 means infinite context window
+    softcap=0.0, # 0.0 means deactivated
+    alibi_slopes=None,
+    deterministic=False,
+    return_attn_probs=False,
+    block_table=None,
+    *,
+    out=None,
+    seqused_k=None,
+    seqlens_q_firstseg=None
+):
+    return FlashAttnVarlen2SegFunc.apply(
+        q,
+        k,
+        v,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        softcap,
+        alibi_slopes,
+        deterministic,
+        return_attn_probs,
+        block_table,
+        out,
+        seqused_k,
+        seqlens_q_firstseg
+    )
+
 
 def flash_attn_varlen_func(
     q,
@@ -1096,6 +1285,7 @@ def flash_attn_varlen_func(
     block_table=None,
     *,
     out=None,
+    seqused_k=None,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in K, V with fewer heads
@@ -1170,6 +1360,7 @@ def flash_attn_varlen_func(
         return_attn_probs,
         block_table,
         out,
+        seqused_k,
     )
 
 
