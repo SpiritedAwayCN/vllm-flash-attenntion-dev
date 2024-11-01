@@ -681,7 +681,7 @@ class FlashAttnVarlen2SegFunc(torch.autograd.Function):
     ):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
-        out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_varlen_forward(
+        out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = _flash_attn_varlen_2seg_forward(
             q,
             k,
             v,
