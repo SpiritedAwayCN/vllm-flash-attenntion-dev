@@ -31,7 +31,10 @@ def get_fwd_split_template() -> str:
 
 namespace FLASH_NAMESPACE {{
 
-template void run_mha_fwd_splitkv_dispatch<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}>(Flash_fwd_params &params, cudaStream_t stream);
+template void run_mha_fwd_splitkv_dispatch<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}, 16>(Flash_fwd_params &params, cudaStream_t stream);
+template void run_mha_fwd_splitkv_dispatch<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}, 32>(Flash_fwd_params &params, cudaStream_t stream);
+template void run_mha_fwd_splitkv_dispatch<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}, 64>(Flash_fwd_params &params, cudaStream_t stream);
+
 
 }} // namespace FLASH_NAMESPACE"""
 

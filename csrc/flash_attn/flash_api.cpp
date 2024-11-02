@@ -239,14 +239,20 @@ void set_params_dgrad(Flash_bwd_params &params,
     params.deterministic = deterministic;
 }
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false, int force_kBlockM=0) {
     FP16_SWITCH(!params.is_bf16, [&] {
         HEADDIM_SWITCH(params.d, [&] {
             BOOL_SWITCH(params.is_causal, Is_causal, [&] {
                 if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
                     run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
                 } else {
-                    run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal>(params, stream);
+                    if(force_kBlockM == 16){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 16>(params, stream);
+                    }else if (force_kBlockM == 32){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 32>(params, stream);
+                    }else if (force_kBlockM == 64){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 64>(params, stream);
+                    }
                 }
             });
         });
@@ -367,7 +373,8 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                     const double softcap,
                     const bool return_softmax,
                     c10::optional<at::Generator> gen_,
-                    const at::Tensor &seqlens_q_firstseg) {
+                    const at::Tensor &seqlens_q_firstseg,
+                    const int64_t force_kBlockM) {
 
     // Otherwise the kernel will be launched from cuda:0 device
     at::cuda::CUDAGuard device_guard{q.device()};

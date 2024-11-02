@@ -144,6 +144,7 @@ def flash_attn_varlen_2seg_func(
     # Version selector
     fa_version: int = DEFAULT_FA_VERSION,
     seqlens_q_firstseg=None,
+    force_kBlockM=64,
 ):
     assert cu_seqlens_k is not None or seqused_k is not None, \
         "cu_seqlens_k or seqused_k must be provided"
@@ -195,6 +196,7 @@ def flash_attn_varlen_2seg_func(
             return_softmax_lse and dropout_p > 0,
             None,
             seqlens_q_firstseg,
+            force_kBlockM,
         )
     elif fa_version == 3:
         raise NotImplementedError(
