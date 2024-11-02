@@ -510,7 +510,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
 
     if (max_seqlen_k > 0) {
         auto stream = at::cuda::getCurrentCUDAStream().stream();
-        run_mha_fwd(params, stream, paged_KV);
+        run_mha_fwd(params, stream, paged_KV, force_kBlockM);
     } else {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         out.zero_();
