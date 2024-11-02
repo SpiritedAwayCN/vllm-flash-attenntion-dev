@@ -526,29 +526,30 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     >;
     using ElementO = std::conditional_t<!Split, Element, ElementAccum>;
 
-    const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb, m_block * kBlockM);
+    const int offset = (params.seqlens_q_firstseg==nullptr || m_block * kBlockM <= params.seqlens_q_firstseg[bidb]) ? 0 : (-params.seqlens_q_firstseg[bidb]) % kBlockM;
+    const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb, m_block * kBlockM + offset);
     // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf("Is_even_MN = %d, is_cumulativ = %d, seqlen_k_cache = %d, actual_seqlen_k = %d\n", Is_even_MN, params.is_seqlens_k_cumulative, binfo.seqlen_k_cache, binfo.actual_seqlen_k); }
     // if (threadIdx.x == 0 && blockIdx.y == 1 && blockIdx.z == 0) { printf("params.knew_ptr = %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ? 0 : params.seqlen_knew)); }
-    if (m_block * kBlockM >= binfo.actual_seqlen_q) return;
+    if (binfo.startloc >= binfo.actual_seqlen_q) return;
 
     const int n_blocks_per_split = ((binfo.actual_seqlen_k + kBlockN - 1) / kBlockN + num_n_splits - 1) / num_n_splits;
     const int n_block_min = !Is_local
         ? n_split_idx * n_blocks_per_split
-        : std::max(n_split_idx * n_blocks_per_split, (m_block * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q - params.window_size_left) / kBlockN);
+        : std::max(n_split_idx * n_blocks_per_split, (binfo.startloc + binfo.actual_seqlen_k - binfo.actual_seqlen_q - params.window_size_left) / kBlockN);
     int n_block_max = std::min(cute::ceil_div(binfo.actual_seqlen_k, kBlockN), (n_split_idx + 1) * n_blocks_per_split);
     if (Is_causal || Is_local) {
         n_block_max = std::min(n_block_max,
-                               cute::ceil_div((m_block + 1) * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q + params.window_size_right, kBlockN));
+                               cute::ceil_div((binfo.startloc + kBlockM) + binfo.actual_seqlen_k - binfo.actual_seqlen_q + params.window_size_right, kBlockN));
     }
     if (n_block_min >= n_block_max) {  // This also covers the case where n_block_max <= 0
         // We exit early and write 0 to gOaccum and -inf to gLSEaccum.
         // Otherwise we might read OOB elements from gK and gV,
         // or get wrong results when we combine gOaccum from different blocks.
         const index_t row_offset_o = binfo.q_offset(params.o_batch_stride, params.o_row_stride, bidb)
-            + m_block * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
+            + binfo.startloc * params.o_row_stride + bidh * params.o_head_stride;
         const index_t row_offset_oaccum = (((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q
-            + m_block * kBlockM) * params.d_rounded;
-        const index_t row_offset_lseaccum = ((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q + m_block * kBlockM;
+            + binfo.startloc) * params.d_rounded;
+        const index_t row_offset_lseaccum = ((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q + binfo.startloc;
         Tensor gOaccum = make_tensor(make_gmem_ptr(reinterpret_cast<ElementO *>(Split ? params.oaccum_ptr : params.o_ptr) + (Split ? row_offset_oaccum : row_offset_o)),
                                       Shape<Int<kBlockM>, Int<kHeadDim>>{},
                                      make_stride(Split ? kHeadDim : params.o_row_stride, _1{}));
@@ -571,12 +572,12 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         }
         // Clear_OOB_K must be false since we don't want to write zeros to gmem
         flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
-            gmem_tiled_copy_Oaccum, tOrOaccum, tOgOaccum, tOcO, tOpO, binfo.actual_seqlen_q - m_block * kBlockM
+            gmem_tiled_copy_Oaccum, tOrOaccum, tOgOaccum, tOcO, tOpO, binfo.actual_seqlen_q - binfo.startloc
         );
         #pragma unroll
         for (int m = 0; m < size<1>(tOgOaccum); ++m) {
             const int row = get<0>(tOcO(0, m, 0));
-            if (row < binfo.actual_seqlen_q - m_block * kBlockM && get<1>(tOcO(0, m, 0)) == 0) { gLSEaccum(row) = Split ? -INFINITY : INFINITY; }
+            if (row < binfo.actual_seqlen_q - binfo.startloc && get<1>(tOcO(0, m, 0)) == 0) { gLSEaccum(row) = Split ? -INFINITY : INFINITY; }
         }
         return;
     }
@@ -588,6 +589,8 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     // We move K and V to the last block.
     const int bidb_cache = params.cache_batch_idx == nullptr ? bidb : params.cache_batch_idx[bidb];
     const int *block_table = params.block_table == nullptr ? nullptr : params.block_table + bidb * params.block_table_batch_stride;
+    const index_t row_offset_q = binfo.q_offset(params.q_batch_stride, params.q_row_stride, bidb)
+        + binfo.startloc * params.q_row_stride + bidh * params.q_head_stride;
     const index_t row_offset_k = block_table == nullptr
         ? binfo.k_offset(params.k_batch_stride, params.k_row_stride, bidb_cache)
           + (n_block_max - 1) * kBlockN * params.k_row_stride + (bidh / params.h_h_k_ratio) * params.k_head_stride
@@ -598,13 +601,14 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
           + (n_block_max - 1) * kBlockN * params.v_row_stride + (bidh / params.h_h_k_ratio) * params.v_head_stride
         : (bidh / params.h_h_k_ratio) * params.v_head_stride;
 
-    
-
-    Tensor mQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.q_ptr) + binfo.q_offset(params.q_batch_stride, params.q_row_stride, bidb)),
-                            make_shape(binfo.actual_seqlen_q, params.h, params.d),
-                            make_stride(params.q_row_stride, params.q_head_stride, _1{}));
-    Tensor gQ = local_tile(mQ(_, bidh, _), Shape<Int<kBlockM>, Int<kHeadDim>>{},
-                           make_coord(m_block, 0));  // (kBlockM, kHeadDim)
+    // Tensor mQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.q_ptr) + binfo.q_offset(params.q_batch_stride, params.q_row_stride, bidb)),
+    //                         make_shape(binfo.actual_seqlen_q, params.h, params.d),
+    //                         make_stride(params.q_row_stride, params.q_head_stride, _1{}));
+    // Tensor gQ = local_tile(mQ(_, bidh, _), Shape<Int<kBlockM>, Int<kHeadDim>>{},
+    //                        make_coord(m_block, 0));  // (kBlockM, kHeadDim)
+    Tensor gQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.q_ptr) + row_offset_q),
+                            Shape<Int<kBlockM>, Int<kHeadDim>>{},
+                            make_stride(params.q_row_stride, _1{}));
     Tensor gK = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.k_ptr) + row_offset_k),
                             Shape<Int<kBlockN>, Int<kHeadDim>>{},
                             make_stride(params.k_row_stride, _1{}));
@@ -815,13 +819,13 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     if (!Append_KV || params.rotary_dim == 0) {
         // We don't need to clear the sQ smem tiles since we'll only write out the valid outputs
         flash::copy<Is_even_MN, Is_even_K>(gmem_tiled_copy_Q, tQgQ, tQsQ, tQcQ, tQpQ,
-                                           binfo.actual_seqlen_q - m_block * kBlockM);
+                                           binfo.actual_seqlen_q - binfo.startloc);
     } else {
         typename Kernel_traits::GmemTiledCopyRotcossin gmem_tiled_copy_rotary;
         auto gmem_thr_copy_rotary = gmem_tiled_copy_rotary.get_thread_slice(tidx);
         typename Kernel_traits::GmemTiledCopyRotcossinCont gmem_tiled_copy_rotary_cont;
         auto gmem_thr_copy_rotary_cont = gmem_tiled_copy_rotary_cont.get_thread_slice(tidx);
-        const index_t row_offset_cossin = (binfo.seqlen_k_cache + (Is_causal || Is_local ? m_block * kBlockM : 0)) * (params.rotary_dim / 2);
+        const index_t row_offset_cossin = (binfo.seqlen_k_cache + (Is_causal || Is_local ? binfo.startloc : 0)) * (params.rotary_dim / 2);
         // If not causal, all the queries get the same the cos/sin, taken at location seqlen_k_cache.
         // We do this by setting the row stride of gCos / gSin to 0.
         Tensor gCos = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.rotary_cos_ptr) + row_offset_cossin),
@@ -842,12 +846,12 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         Tensor tRgSinCont = gmem_thr_copy_rotary_cont.partition_S(gSinCont);
         if (params.is_rotary_interleaved) {
             flash::copy_rotary_interleaved<Is_even_K>(
-                tQgQ, tQsQ, tRgCos, tRgSin, tQcQ, binfo.actual_seqlen_q - m_block * kBlockM,
+                tQgQ, tQsQ, tRgCos, tRgSin, tQcQ, binfo.actual_seqlen_q - binfo.startloc,
                 0, params.d, params.rotary_dim
             );
         } else {
             flash::copy_rotary_contiguous<Is_even_K>(
-                tQgQ, tQsQ, tRgCosCont, tRgSinCont, tQcQ, binfo.actual_seqlen_q - m_block * kBlockM,
+                tQgQ, tQsQ, tRgCosCont, tRgSinCont, tQcQ, binfo.actual_seqlen_q - binfo.startloc,
                 0, params.d, params.rotary_dim
             );
         }
@@ -917,7 +921,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
 
 
         mask.template apply_mask<Is_causal, Is_even_MN>(
-            acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+            acc_s, n_block * kBlockN, binfo.startloc + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
         );
 
         flash::cp_async_wait<0>();
@@ -1001,7 +1005,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         }
 
         mask.template apply_mask</*Causal_mask=*/false>(
-            acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+            acc_s, n_block * kBlockN, binfo.startloc + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
         );
         softmax.template softmax_rescale_o</*Is_first=*/false, /*Check_inf=*/Is_local>(acc_s, acc_o, params.scale_softmax_log2);
 
@@ -1038,12 +1042,12 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     cute::copy(smem_tiled_copy_Oaccum, taccOrOaccum, taccOsOaccum);
 
     const index_t row_offset_o = binfo.q_offset(params.o_batch_stride, params.o_row_stride, bidb)
-        + m_block * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
+        + binfo.startloc * params.o_row_stride + bidh * params.o_head_stride;
     const index_t row_offset_oaccum = (((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q
-                                         + m_block * kBlockM) * params.d_rounded;
+                                         + binfo.startloc) * params.d_rounded;
     const index_t row_offset_lseaccum = (Split || !params.unpadded_lse ?
             ((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q : bidh * params.total_q + binfo.q_offset(params.seqlen_q, 1, bidb)
-        ) + m_block * kBlockM;
+        ) + binfo.startloc;
 
     Tensor gOaccum = make_tensor(make_gmem_ptr(reinterpret_cast<ElementO *>(Split ? params.oaccum_ptr : params.o_ptr) + (Split ? row_offset_oaccum : row_offset_o)),
                                  Shape<Int<kBlockM>, Int<kHeadDim>>{},
@@ -1072,7 +1076,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         #pragma unroll
         for (int mi = 0; mi < size(lse); ++mi) {
             const int row = get<0>(taccOcO_row(mi));
-            if (row < binfo.actual_seqlen_q - m_block * kBlockM) { gLSEaccum(row) = lse(mi); }
+            if (row < binfo.actual_seqlen_q - binfo.startloc) { gLSEaccum(row) = lse(mi); }
         }
     }
 
@@ -1087,7 +1091,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     }
     // Clear_OOB_K must be false since we don't want to write zeros to gmem
     flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
-        gmem_tiled_copy_Oaccum, tOrOaccum, tOgOaccum, tOcO, tOpO, binfo.actual_seqlen_q - m_block * kBlockM
+        gmem_tiled_copy_Oaccum, tOrOaccum, tOgOaccum, tOcO, tOpO, binfo.actual_seqlen_q - binfo.startloc
     );
 }
 

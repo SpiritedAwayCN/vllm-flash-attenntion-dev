@@ -13,7 +13,8 @@ struct BlockInfo {
 
     template<typename Params>
     __device__ BlockInfo(const Params &params, const int bidb, const int startloc)
-        : sum_s_q(!Varlen || params.cu_seqlens_q == nullptr ? -1 : params.cu_seqlens_q[bidb])
+        : startloc(startloc)
+        , sum_s_q(!Varlen || params.cu_seqlens_q == nullptr ? -1 : params.cu_seqlens_q[bidb])
         , sum_s_k(!Varlen || params.cu_seqlens_k == nullptr || !params.is_seqlens_k_cumulative ? -1 : params.cu_seqlens_k[bidb])
         , actual_seqlen_q(!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q : \
             (params.seqlens_q_firstseg==nullptr || startloc>= params.seqlens_q_firstseg[bidb]? params.cu_seqlens_q[bidb + 1] - sum_s_q : params.seqlens_q_firstseg[bidb]))
@@ -35,6 +36,7 @@ struct BlockInfo {
         return sum_s_k == -1 ? bidb * batch_stride : uint32_t(sum_s_k) * row_stride;
     }
 
+    const int startloc;
     const int sum_s_q;
     const int sum_s_k;
     const int actual_seqlen_q;
