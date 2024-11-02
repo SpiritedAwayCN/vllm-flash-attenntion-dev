@@ -154,14 +154,20 @@ void set_params_fprop(Flash_fwd_params &params,
     params.seqlenq_ngroups_swapped = seqlenq_ngroups_swapped;
 }
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false, int force_kBlockM=0) {
     FP16_SWITCH(!params.is_bf16, [&] {
         HEADDIM_SWITCH(params.d, [&] {
             BOOL_SWITCH(params.is_causal, Is_causal, [&] {
                 if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
                     run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
                 } else {
-                    run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal>(params, stream);
+                    if(force_kBlockM == 16){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 16>(params, stream);
+                    }else if (force_kBlockM == 32){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 32>(params, stream);
+                    }else if (force_kBlockM == 64){
+                        run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal, 64>(params, stream);
+                    }
                 }
             });
         });
@@ -282,7 +288,8 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                     const double softcap,
                     const bool return_softmax,
                     c10::optional<at::Generator> gen_,
-                    const at::Tensor &seqlens_q_firstseg) {
+                    const at::Tensor &seqlens_q_firstseg,
+                    const int64_t force_kBlockM) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
@@ -1259,7 +1266,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
             "Tensor cu_seqlens_k, Tensor? seqused_k, Tensor? block_table, Tensor? alibi_slopes, "
             "int max_seqlen_q, int max_seqlen_k, float p_dropout, float softmax_scale, bool zero_tensors, "
             "bool is_causal, int window_size_left, int window_size_right, float softcap, bool return_softmax, "
-            "Generator? gen, Tensor seqlens_q_firstseg) -> Tensor[]");
+            "Generator? gen, Tensor seqlens_q_firstseg, int force_kBlockM) -> Tensor[]");
     ops.impl("varlen_2seg_fwd", torch::kCUDA, &mha_varlen_2seg_fwd);
 
     ops.def("varlen_fwd(Tensor! q, Tensor k, Tensor v, Tensor!? out, Tensor cu_seqlens_q, "

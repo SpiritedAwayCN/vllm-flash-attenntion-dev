@@ -87,6 +87,7 @@ def _flash_attn_varlen_2seg_forward(
     out=None,
     seqused_k=None,
     seqlens_q_firstseg=None,
+    force_kBlockM=64,
 ):
     q, k, v = [maybe_contiguous(x) for x in (q, k, v)]
     out, q, k, v, out_padded, softmax_lse, S_dmask, rng_state = torch.ops.vllm_flash_attn_c.varlen_2seg_fwd(
@@ -110,7 +111,8 @@ def _flash_attn_varlen_2seg_forward(
         softcap,
         return_softmax,
         None,
-        seqlens_q_firstseg
+        seqlens_q_firstseg,
+        force_kBlockM,
     )
     # if out.isnan().any() or softmax_lse.isnan().any():
     #     breakpoint()
@@ -677,7 +679,8 @@ class FlashAttnVarlen2SegFunc(torch.autograd.Function):
         block_table,
         out=None,
         seqused_k=None,
-        seqlens_q_firstseg=None
+        seqlens_q_firstseg=None,
+        force_kBlockM=64,
     ):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
@@ -700,6 +703,7 @@ class FlashAttnVarlen2SegFunc(torch.autograd.Function):
             out=out,
             seqused_k=seqused_k,
             seqlens_q_firstseg=seqlens_q_firstseg,
+            force_kBlockM=force_kBlockM,
         )
         ctx.save_for_backward(
             q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state
@@ -1241,7 +1245,8 @@ def flash_attn_varlen_2seg_func(
     *,
     out=None,
     seqused_k=None,
-    seqlens_q_firstseg=None
+    seqlens_q_firstseg=None,
+    force_kBlockM=64,
 ):
     return FlashAttnVarlen2SegFunc.apply(
         q,
@@ -1262,7 +1267,8 @@ def flash_attn_varlen_2seg_func(
         block_table,
         out,
         seqused_k,
-        seqlens_q_firstseg
+        seqlens_q_firstseg,
+        force_kBlockM,
     )
 
 
