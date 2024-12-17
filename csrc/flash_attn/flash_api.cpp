@@ -380,6 +380,8 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                     const bool return_softmax,
                     c10::optional<at::Generator> gen_,
                     const at::Tensor &seqlens_q_firstseg,
+                    const at::Tensor &seqlens_q_secondseg,
+                    const c10::optional<at::Tensor> &seqused_k_2,
                     const int64_t force_kBlockM) {
 
     // Otherwise the kernel will be launched from cuda:0 device
@@ -476,9 +478,19 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
         TORCH_CHECK(seqused_k_.is_contiguous(), "seqused_k must be contiguous");
         CHECK_SHAPE(seqused_k_, batch_size);
     }
+    if (seqused_k_2.has_value()){
+        auto seqused_k_ = seqused_k_2.value();
+        TORCH_CHECK(seqused_k_.dtype() == torch::kInt32, "seqused_k_2 must have dtype int32");
+        TORCH_CHECK(seqused_k_.is_cuda(), "seqused_k_2 must be on CUDA device");
+        TORCH_CHECK(seqused_k_.is_contiguous(), "seqused_k_2 must be contiguous");
+        CHECK_SHAPE(seqused_k_, batch_size);
+    }
 
     CHECK_DEVICE(seqlens_q_firstseg);
-    CHECK_SHAPE(seqlens_q_firstseg, batch_size)
+    CHECK_SHAPE(seqlens_q_firstseg, batch_size);
+
+    CHECK_DEVICE(seqlens_q_secondseg);
+    CHECK_SHAPE(seqlens_q_secondseg, batch_size);
 
     at::Tensor out;
     if (out_.has_value()) {
@@ -542,6 +554,8 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
                      /*unpadded_lse*/true);
     params.total_q = total_q;
     params.seqlens_q_firstseg = static_cast<int*>(seqlens_q_firstseg.data_ptr());
+    params.seqlens_q_secondseg = static_cast<int*>(seqlens_q_secondseg.data_ptr());
+    params.seqused_k_2 = static_cast<int*>(seqused_k_2.has_value() ? seqused_k_2.value().data_ptr() : nullptr);
 
     if (paged_KV) {
         params.block_table = block_table.data_ptr<int>();

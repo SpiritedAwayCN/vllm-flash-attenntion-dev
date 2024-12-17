@@ -144,6 +144,8 @@ def flash_attn_varlen_2seg_func(
     # Version selector
     fa_version: int = DEFAULT_FA_VERSION,
     seqlens_q_firstseg=None,
+    seqlens_q_secondseg=None,
+    seqused_k_2=None,
     force_kBlockM=64,
 ):
     assert cu_seqlens_k is not None or seqused_k is not None, \
@@ -196,6 +198,8 @@ def flash_attn_varlen_2seg_func(
             return_softmax_lse and dropout_p > 0,
             None,
             seqlens_q_firstseg,
+            seqlens_q_secondseg,
+            seqused_k_2,
             force_kBlockM,
         )
     elif fa_version == 3:

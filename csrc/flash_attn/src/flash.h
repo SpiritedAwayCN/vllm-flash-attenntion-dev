@@ -143,6 +143,8 @@ struct Flash_fwd_params : public Qkv_params {
 
     // Optional for 2-segment forward
     int * __restrict__ seqlens_q_firstseg; // shape (b,)
+    int * __restrict__ seqlens_q_secondseg; // shape (b,)
+    int * __restrict__ seqused_k_2;
     // int * __restrict__ seqlens_k_fitstseg; // shape (b,)
 };
 
