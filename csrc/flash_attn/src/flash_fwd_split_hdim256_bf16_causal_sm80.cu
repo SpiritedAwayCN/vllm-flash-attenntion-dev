@@ -4,7 +4,10 @@
 #include "namespace_config.h"
 #include "flash_fwd_launch_template.h"
 
+namespace FLASH_NAMESPACE {
+
 template void run_mha_fwd_splitkv_dispatch<cutlass::bfloat16_t, 256, true, 16>(Flash_fwd_params &params, cudaStream_t stream);
 template void run_mha_fwd_splitkv_dispatch<cutlass::bfloat16_t, 256, true, 32>(Flash_fwd_params &params, cudaStream_t stream);
 template void run_mha_fwd_splitkv_dispatch<cutlass::bfloat16_t, 256, true, 64>(Flash_fwd_params &params, cudaStream_t stream);
 
+}

@@ -11,9 +11,9 @@ namespace FLASH_NAMESPACE {
 
 template<bool Varlen=true>
 struct BlockInfo {
-
+    // the default value of startloc is just a workaround for compiling the code, the sparse kernel have not passed this yet. (chunan)
     template<typename Params>
-    __device__ BlockInfo(const Params &params, const int bidb, const int startloc)
+    __device__ BlockInfo(const Params &params, const int bidb, const int startloc=-1)
         : sum_s_q(!Varlen || params.cu_seqlens_q == nullptr ? -1 : params.cu_seqlens_q[bidb])
         , sum_s_k(!Varlen || params.cu_seqlens_k == nullptr || !params.is_seqlens_k_cumulative ? -1 : params.cu_seqlens_k[bidb])
         , actual_seqlen_q(!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q : \
