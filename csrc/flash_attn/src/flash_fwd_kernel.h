@@ -521,6 +521,9 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     using ElementO = std::conditional_t<!Split, Element, ElementAccum>;
 
     const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb, m_block * kBlockM);
+    // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { 
+    //     printf("[blockIdx.x = %d] Is_even_MN = %d, is_cumulativ = %d, seqlen_k_cache = %d, actual_seqlen_q = %d, actual_seqlen_k = %d\n", blockIdx.x, Is_even_MN, params.is_seqlens_k_cumulative, binfo.seqlen_k_cache, binfo.actual_seqlen_q, binfo.actual_seqlen_k); 
+    // }
     // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf("Is_even_MN = %d, is_cumulativ = %d, seqlen_k_cache = %d, actual_seqlen_k = %d\n", Is_even_MN, params.is_seqlens_k_cumulative, binfo.seqlen_k_cache, binfo.actual_seqlen_k); }
     // if (threadIdx.x == 0 && blockIdx.y == 1 && blockIdx.z == 0) { printf("params.knew_ptr = %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ? 0 : params.seqlen_knew)); }
     if (m_block * kBlockM >= binfo.actual_seqlen_q) return;

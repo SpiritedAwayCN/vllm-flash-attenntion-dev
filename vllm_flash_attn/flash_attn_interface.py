@@ -150,8 +150,8 @@ def flash_attn_varlen_2seg_func(
 ):
     assert cu_seqlens_k is not None or seqused_k is not None, \
         "cu_seqlens_k or seqused_k must be provided"
-    assert cu_seqlens_k is None or seqused_k is None, \
-        "cu_seqlens_k and seqused_k cannot be provided at the same time"
+    # assert cu_seqlens_k is None or seqused_k is None, \
+    #     "cu_seqlens_k and seqused_k cannot be provided at the same time"
     assert block_table is None or seqused_k is not None, \
         "seqused_k must be provided if block_table is provided"
     
@@ -175,7 +175,7 @@ def flash_attn_varlen_2seg_func(
                     "FA2 does not support scheduler_metadata, q_descale, "
                     "k_descale, v_descale"
                 )
-        out, softmax_lse = torch.ops._vllm_fa2_C.varlen_fwd(
+        out, softmax_lse = torch.ops._vllm_fa2_C.varlen_2seg_fwd(
             q, k, v,
             out,
             cu_seqlens_q,

@@ -471,7 +471,10 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
     }
 
     CHECK_SHAPE(cu_seqlens_q, batch_size + 1);
-    CHECK_SHAPE(cu_seqlens_k, batch_size + 1);
+    // MODIFIED: SCA
+    // batch_size + 1 -> batch_size, not cumulative seqlens
+    // CHECK_SHAPE(cu_seqlens_k, batch_size + 1);
+    CHECK_SHAPE(cu_seqlens_k, batch_size);
     if (seqused_k.has_value()){
         auto seqused_k_ = seqused_k.value();
         TORCH_CHECK(seqused_k_.dtype() == torch::kInt32, "seqused_k must have dtype int32");
@@ -557,6 +560,7 @@ mha_varlen_2seg_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q 
     params.seqlens_q_firstseg = static_cast<int*>(seqlens_q_firstseg.data_ptr());
     params.seqlens_q_secondseg = static_cast<int*>(seqlens_q_secondseg.data_ptr());
     params.seqused_k_2 = static_cast<int*>(seqused_k_2.has_value() ? seqused_k_2.value().data_ptr() : nullptr);
+    params.is_seqlens_k_cumulative = false; // We don't support cumulative seqlens for varlen 2-seg
 
     if (paged_KV) {
         params.block_table = block_table.data_ptr<int>();
